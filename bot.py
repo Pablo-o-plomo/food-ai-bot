@@ -1,10 +1,3 @@
-import asyncio
-import socket
-
-# фикс для Windows + Telegram
-asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-socket.setdefaulttimeout(60)
-
 import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
