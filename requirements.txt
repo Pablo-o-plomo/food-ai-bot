@@ -1,5 +1,3 @@
-python-telegram-bot==20.7
-openai
-pillow
-requests
-python-dotenv
+python-telegram-bot==21.6
+openai>=1.40.0
+python-dotenv>=1.0.1

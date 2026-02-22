@@ -1,45 +1,31 @@
 import os
 from openai import OpenAI
-from dotenv import load_dotenv
 
-load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def coach_reply(nutrition_text, today_stats=None):
+def coach_chat(user_message: str) -> str:
+    """
+    Чат с коучем по питанию / дисциплине
+    """
 
-    context = ""
-    if today_stats:
-        context = f"""
-Вот текущий прогресс пользователя за сегодня:
-Калории: {today_stats['calories']}
-Белки: {today_stats['protein']}
-Жиры: {today_stats['fat']}
-Углеводы: {today_stats['carbs']}
-"""
+    system_prompt = """
+    Ты строгий, но поддерживающий коуч по питанию и дисциплине.
+    Говори коротко, по делу.
+    Не сюсюкай.
+    Если человек оправдывается — мягко возвращай к ответственности.
+    """
 
-    prompt = f"""
-Ты дружелюбный AI-нутрициолог в Telegram.
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.6,
+        )
 
-Правила:
-- отвечай по-человечески
-- кратко (3-6 строк)
-- поддерживающе
-- без осуждения
-- используй 1-3 уместных эмодзи
-- НЕ пиши как врач
-- НЕ пиши длинные лекции
+        return response.choices[0].message.content.strip()
 
-Вот данные о приёме пищи:
-{nutrition_text}
-
-{context}
-
-Сформируй сообщение пользователю.
-"""
-
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=prompt
-    )
-
-    return response.output_text
+    except Exception as e:
+        return f"Ошибка коуча: {e}"
