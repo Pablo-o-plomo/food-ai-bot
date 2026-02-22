@@ -1,9 +1,11 @@
 import json
 import os
+from datetime import date
 
 DB_FILE = "users.json"
 
 
+# ---------- базовые функции ----------
 def load_db():
     if not os.path.exists(DB_FILE):
         return {}
@@ -16,12 +18,52 @@ def save_db(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def add_food(user_id, calories, protein, fat, carbs):
-    db = load_db()
-    user_id = str(user_id)
+def today_key():
+    return date.today().isoformat()
 
-    if user_id not in db:
-        db[user_id] = {
+
+def ensure_user(user_id):
+    db = load_db()
+    uid = str(user_id)
+
+    if uid not in db:
+        db[uid] = {
+            "days": {}
+        }
+        save_db(db)
+
+
+# ---------- получить день ----------
+def get_day(user_id):
+    ensure_user(user_id)
+
+    db = load_db()
+    uid = str(user_id)
+    day = today_key()
+
+    if day not in db[uid]["days"]:
+        db[uid]["days"][day] = {
+            "calories": 0,
+            "protein": 0,
+            "fat": 0,
+            "carbs": 0,
+            "history": []
+        }
+        save_db(db)
+
+    return db[uid]["days"][day]
+
+
+# ---------- добавить еду ----------
+def add_food(user_id, calories, protein, fat, carbs):
+    ensure_user(user_id)
+
+    db = load_db()
+    uid = str(user_id)
+    day = today_key()
+
+    if day not in db[uid]["days"]:
+        db[uid]["days"][day] = {
             "calories": 0,
             "protein": 0,
             "fat": 0,
@@ -29,12 +71,13 @@ def add_food(user_id, calories, protein, fat, carbs):
             "history": []
         }
 
-    db[user_id]["calories"] += calories
-    db[user_id]["protein"] += protein
-    db[user_id]["fat"] += fat
-    db[user_id]["carbs"] += carbs
+    db[uid]["days"][day]["calories"] += calories
+    db[uid]["days"][day]["protein"] += protein
+    db[uid]["days"][day]["fat"] += fat
+    db[uid]["days"][day]["carbs"] += carbs
 
-    db[user_id]["history"].append({
+    # сохраняем историю (чтобы можно было отменять)
+    db[uid]["days"][day]["history"].append({
         "calories": calories,
         "protein": protein,
         "fat": fat,
@@ -44,29 +87,42 @@ def add_food(user_id, calories, protein, fat, carbs):
     save_db(db)
 
 
+# ---------- отменить последний приём пищи ----------
 def undo_last(user_id):
-    db = load_db()
-    user_id = str(user_id)
+    ensure_user(user_id)
 
-    if user_id not in db or not db[user_id]["history"]:
+    db = load_db()
+    uid = str(user_id)
+    day = today_key()
+
+    if day not in db[uid]["days"]:
         return None
 
-    last = db[user_id]["history"].pop()
+    history = db[uid]["days"][day]["history"]
 
-    db[user_id]["calories"] -= last["calories"]
-    db[user_id]["protein"] -= last["protein"]
-    db[user_id]["fat"] -= last["fat"]
-    db[user_id]["carbs"] -= last["carbs"]
+    if not history:
+        return None
+
+    last = history.pop()
+
+    db[uid]["days"][day]["calories"] -= last["calories"]
+    db[uid]["days"][day]["protein"] -= last["protein"]
+    db[uid]["days"][day]["fat"] -= last["fat"]
+    db[uid]["days"][day]["carbs"] -= last["carbs"]
 
     save_db(db)
-    return db[user_id]
+    return db[uid]["days"][day]
 
 
+# ---------- обнулить день ----------
 def reset_day(user_id):
-    db = load_db()
-    user_id = str(user_id)
+    ensure_user(user_id)
 
-    db[user_id] = {
+    db = load_db()
+    uid = str(user_id)
+    day = today_key()
+
+    db[uid]["days"][day] = {
         "calories": 0,
         "protein": 0,
         "fat": 0,
@@ -75,8 +131,3 @@ def reset_day(user_id):
     }
 
     save_db(db)
-
-
-def get_day(user_id):
-    db = load_db()
-    return db.get(str(user_id), {"calories":0,"protein":0,"fat":0,"carbs":0,"history":[]})
