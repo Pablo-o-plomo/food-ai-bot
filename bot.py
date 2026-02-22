@@ -1,8 +1,7 @@
 import os
 import re
-from typing import Optional
-
 from dotenv import load_dotenv
+
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -10,6 +9,7 @@ from telegram import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
+
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -26,322 +26,187 @@ from voice_ai import transcribe_voice
 
 from users_db import (
     ensure_user,
-    get_user,
-    set_profile_field,
     add_food_entry,
     get_today_summary,
-    profile_is_complete,
 )
 
 load_dotenv()
-
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# ---------- UI ----------
+# ================== КЛАВИАТУРЫ ==================
+
 MAIN_KB = ReplyKeyboardMarkup(
     [
         [KeyboardButton("🍽 Добавить еду"), KeyboardButton("💡 Совет")],
-        [KeyboardButton("📊 Сегодня"), KeyboardButton("⚙️ Профиль")],
+        [KeyboardButton("📊 Сегодня"), KeyboardButton("🔥 Привести тело в порядок")],
+        [KeyboardButton("⚙️ Режим")],
     ],
     resize_keyboard=True,
 )
 
 ADD_KB = InlineKeyboardMarkup(
     [
-        [InlineKeyboardButton("✍️ Текст", callback_data="add:text")],
-        [InlineKeyboardButton("📷 Фото", callback_data="add:photo")],
-        [InlineKeyboardButton("🎤 Голос", callback_data="add:voice")],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="nav:home")],
+        [InlineKeyboardButton("✍️ Текст", callback_data="add_text")],
+        [InlineKeyboardButton("📷 Фото", callback_data="add_photo")],
+        [InlineKeyboardButton("🎤 Голос", callback_data="add_voice")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="home")],
+    ]
+)
+
+MODE_KB = InlineKeyboardMarkup(
+    [
+        [InlineKeyboardButton("⚡ Просто считать калории", callback_data="mode_quick")],
+        [InlineKeyboardButton("📈 План и статистика", callback_data="mode_plan")],
     ]
 )
 
 ADVICE_KB = InlineKeyboardMarkup(
     [
-        [InlineKeyboardButton("🍫 Хочу сладкое", callback_data="adv:sweet")],
-        [InlineKeyboardButton("🍗 Хочу сытное", callback_data="adv:hearty")],
-        [InlineKeyboardButton("🥗 Хочу лёгкое", callback_data="adv:light")],
-        [InlineKeyboardButton("💪 Добрать белок", callback_data="adv:protein")],
-        [InlineKeyboardButton("🌙 Что на ужин", callback_data="adv:dinner")],
-        [InlineKeyboardButton("❓ Задать вопрос", callback_data="adv:question")],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="nav:home")],
+        [InlineKeyboardButton("🍫 Хочу сладкое", callback_data="adv_sweet")],
+        [InlineKeyboardButton("🍗 Хочу сытное", callback_data="adv_hearty")],
+        [InlineKeyboardButton("🥗 Хочу лёгкое", callback_data="adv_light")],
+        [InlineKeyboardButton("💪 Добрать белок", callback_data="adv_protein")],
+        [InlineKeyboardButton("🌙 Что на ужин", callback_data="adv_dinner")],
+        [InlineKeyboardButton("❓ Задать вопрос", callback_data="adv_question")],
     ]
 )
 
-# ---------- States ----------
-S_NONE = "none"
-S_PROFILE_AGE = "profile_age"
-S_PROFILE_SEX = "profile_sex"
-S_PROFILE_HEIGHT = "profile_height"
-S_PROFILE_WEIGHT = "profile_weight"
-S_PROFILE_KCAL = "profile_kcal"
+CONFIRM_KB = InlineKeyboardMarkup(
+    [
+        [InlineKeyboardButton("✅ Записать", callback_data="save_food")],
+        [InlineKeyboardButton("✏️ Исправить", callback_data="edit_food")],
+        [InlineKeyboardButton("❌ Отмена", callback_data="cancel_food")],
+    ]
+)
 
-S_ADD_TEXT = "add_text"
-S_ADD_PHOTO = "add_photo"
-S_ADD_VOICE = "add_voice"
+# ================== START ==================
 
-S_CONFIRM = "confirm"        # confirm last recognized text
-S_EDIT = "edit"              # user edits recognized text
-
-S_ADVICE_ASK = "advice_ask"  # user asks custom question
-
-
-def _set_state(ctx: ContextTypes.DEFAULT_TYPE, state: str):
-    ctx.user_data["state"] = state
-
-
-def _get_state(ctx: ContextTypes.DEFAULT_TYPE) -> str:
-    return ctx.user_data.get("state", S_NONE)
-
-
-def _needs_profile(user_id: int) -> bool:
-    return not profile_is_complete(user_id)
-
-
-async def _go_home(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    _set_state(ctx, S_NONE)
-    text = "Главное меню."
-    if update.message:
-        await update.message.reply_text(text, reply_markup=MAIN_KB)
-    else:
-        await update.effective_chat.send_message(text, reply_markup=MAIN_KB)
-
-
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id, user.username or "")
+    context.user_data["mode"] = "quick"
+
     await update.message.reply_text(
-        "Food AI Bot запущен.\nВыбирай действие:",
+        f"Привет, {user.first_name} 👋\n\n"
+        "Я умею:\n"
+        "• считать калории по фото, голосу и тексту\n"
+        "• вести дневник питания\n"
+        "• помогать без занудства\n\n"
+        "Выбери действие:",
         reply_markup=MAIN_KB,
     )
 
-
-# ---------- Profile flow ----------
-async def _start_profile_flow(chat, ctx):
-    _set_state(ctx, S_PROFILE_AGE)
-    await chat.send_message("Сначала заполним профиль.\nСколько тебе лет? (числом, например 32)")
-
-
-async def _profile_step(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Returns True if handled as profile step."""
-    user_id = update.effective_user.id
-    st = _get_state(ctx)
-    text = (update.message.text or "").strip()
-
-    if st == S_PROFILE_AGE:
-        if not text.isdigit():
-            await update.message.reply_text("Возраст — числом. Например: 32")
-            return True
-        set_profile_field(user_id, "age", int(text))
-        _set_state(ctx, S_PROFILE_SEX)
-        await update.message.reply_text("Пол? Напиши: m (муж) или f (жен)")
-        return True
-
-    if st == S_PROFILE_SEX:
-        t = text.lower()
-        if t not in ("m", "f"):
-            await update.message.reply_text("Только m или f.")
-            return True
-        set_profile_field(user_id, "sex", t)
-        _set_state(ctx, S_PROFILE_HEIGHT)
-        await update.message.reply_text("Рост в см? Например: 180")
-        return True
-
-    if st == S_PROFILE_HEIGHT:
-        if not text.isdigit():
-            await update.message.reply_text("Рост — числом. Например: 180")
-            return True
-        set_profile_field(user_id, "height", int(text))
-        _set_state(ctx, S_PROFILE_WEIGHT)
-        await update.message.reply_text("Вес в кг? Например: 92")
-        return True
-
-    if st == S_PROFILE_WEIGHT:
-        m = re.match(r"^\d+([.,]\d+)?$", text)
-        if not m:
-            await update.message.reply_text("Вес — числом. Например: 92 или 92.5")
-            return True
-        set_profile_field(user_id, "weight", float(text.replace(",", ".")))
-        _set_state(ctx, S_PROFILE_KCAL)
-        await update.message.reply_text("Цель по калориям в день? Например: 2000")
-        return True
-
-    if st == S_PROFILE_KCAL:
-        if not text.isdigit():
-            await update.message.reply_text("Калории — числом. Например: 2000")
-            return True
-        set_profile_field(user_id, "kcal_target", int(text))
-        _set_state(ctx, S_NONE)
-        await update.message.reply_text("Готово ✅ Профиль заполнен.", reply_markup=MAIN_KB)
-
-        # if we had pending food text -> continue
-        pending = ctx.user_data.pop("pending_food_text", None)
-        if pending:
-            await update.message.reply_text("Продолжаем запись еды. Что распознано:")
-            await _show_confirm(update, ctx, pending)
-
-        return True
-
-    return False
-
-
-# ---------- Confirm / edit flow ----------
-def _confirm_kb():
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("✅ Записать", callback_data="cf:save")],
-            [InlineKeyboardButton("✏️ Исправить", callback_data="cf:edit")],
-            [InlineKeyboardButton("❌ Отмена", callback_data="cf:cancel")],
-        ]
-    )
-
-
-async def _show_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE, recognized_text: str):
-    ctx.user_data["last_food_text"] = recognized_text
-    _set_state(ctx, S_CONFIRM)
     await update.message.reply_text(
-        f"Я распознал и хочу записать вот это:\n\n**{recognized_text}**\n\nПодтверждаешь?",
-        reply_markup=_confirm_kb(),
-        parse_mode="Markdown",
+        "Если захочешь — помогу привести тело в порядок: цель, контроль и подсказки.\n"
+        "Кнопка ниже 👇",
+        reply_markup=MAIN_KB,
     )
 
+# ================== CALLBACK ==================
 
-def _extract_kcal(analysis_text: str) -> Optional[int]:
-    """
-    Пытаемся вытащить калории из ответа analyze_text_food.
-    Если в твоём analyze_text_food другой формат — скажешь, я подстрою.
-    """
-    # варианты: "Калории: 340", "340 ккал", "≈ 340 ккал"
-    m = re.search(r"(\d{2,5})\s*(ккал|kcal)", analysis_text.lower())
-    if m:
-        try:
-            return int(m.group(1))
-        except:
-            return None
-    m2 = re.search(r"калор(ий|ии|ий)\s*[:\-]?\s*(\d{2,5})", analysis_text.lower())
-    if m2:
-        try:
-            return int(m2.group(2))
-        except:
-            return None
-    return None
-
-
-# ---------- Callback handler ----------
-async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user = update.effective_user
-    ensure_user(user.id, user.username or "")
+    data = query.data
 
-    data = query.data or ""
-
-    # Navigation
-    if data == "nav:home":
-        _set_state(ctx, S_NONE)
-        await query.message.reply_text("Главное меню.", reply_markup=MAIN_KB)
+    # ---- режимы
+    if data == "mode_quick":
+        context.user_data["mode"] = "quick"
+        await query.message.reply_text("Ок 👍 Просто считаем калории.", reply_markup=MAIN_KB)
         return
 
-    # Add food menu
-    if data == "add:text":
-        if _needs_profile(user.id):
-            ctx.user_data["pending_food_text"] = None
-            await _start_profile_flow(query.message.chat, ctx)
-            return
-        _set_state(ctx, S_ADD_TEXT)
-        await query.message.reply_text("Напиши, что съел(а). Например: `яйца варёные 3 шт`", parse_mode="Markdown")
+    if data == "mode_plan":
+        context.user_data["mode"] = "plan"
+        await query.message.reply_text(
+            "Включили режим плана 📈\nТеперь буду показывать остаток калорий за день.",
+            reply_markup=MAIN_KB,
+        )
         return
 
-    if data == "add:photo":
-        if _needs_profile(user.id):
-            await _start_profile_flow(query.message.chat, ctx)
-            return
-        _set_state(ctx, S_ADD_PHOTO)
-        await query.message.reply_text("Ок. Пришли фото еды 📷")
+    # ---- добавление еды
+    if data == "add_text":
+        context.user_data["state"] = "wait_text_food"
+        await query.message.reply_text("Напиши что съел. Например: яйца варёные 3 шт")
         return
 
-    if data == "add:voice":
-        if _needs_profile(user.id):
-            await _start_profile_flow(query.message.chat, ctx)
-            return
-        _set_state(ctx, S_ADD_VOICE)
-        await query.message.reply_text("Ок. Запиши голосом, что съел 🎤")
+    if data == "add_photo":
+        context.user_data["state"] = "wait_photo_food"
+        await query.message.reply_text("Пришли фото еды 📷")
         return
 
-    # Advice menu
-    if data.startswith("adv:"):
-        key = data.split(":", 1)[1]
-
-        if key == "question":
-            _set_state(ctx, S_ADVICE_ASK)
-            await query.message.reply_text("Ок. Задай вопрос.")
-            return
-
-        prompts = {
-            "sweet": "Хочу сладкое. Дай вариант без срыва: 2-3 опции и что выбрать прямо сейчас.",
-            "hearty": "Хочу сытное. Дай варианты плотного приема пищи, но в дефиците.",
-            "light": "Хочу лёгкое. Дай варианты лёгкого блюда/перекуса.",
-            "protein": "Надо добрать белок. Дай 3 варианта и порции.",
-            "dinner": "Что на ужин сегодня? Дай 3 варианта и порции.",
-        }
-        prompt = prompts.get(key, "Дай совет по питанию.")
-        reply = coach_chat(prompt)
-        await query.message.reply_text(reply, reply_markup=ADVICE_KB)
+    if data == "add_voice":
+        context.user_data["state"] = "wait_voice_food"
+        await query.message.reply_text("Запиши голосом что съел 🎤")
         return
 
-    # Confirm / edit / cancel
-    if data == "cf:cancel":
-        ctx.user_data.pop("last_food_text", None)
-        _set_state(ctx, S_NONE)
+    # ---- подтверждение
+    if data == "cancel_food":
+        context.user_data.pop("last_food", None)
         await query.message.reply_text("Ок, отменил.", reply_markup=MAIN_KB)
         return
 
-    if data == "cf:edit":
-        _set_state(ctx, S_EDIT)
-        last = ctx.user_data.get("last_food_text", "")
-        await query.message.reply_text(f"Исправь текст и отправь заново.\nТекущее: {last}")
+    if data == "edit_food":
+        context.user_data["state"] = "edit_food"
+        await query.message.reply_text("Исправь текст и отправь заново.")
         return
 
-    if data == "cf:save":
-        text = ctx.user_data.get("last_food_text")
-        if not text:
-            await query.message.reply_text("Не вижу что сохранять. Попробуй ещё раз.", reply_markup=MAIN_KB)
-            _set_state(ctx, S_NONE)
+    if data == "save_food":
+        food = context.user_data.get("last_food")
+        if not food:
+            await query.message.reply_text("Ошибка записи.")
             return
 
-        # Analyze text -> kcal
-        analysis = analyze_text_food(text, get_user(user.id).get("profile", {}))
-        kcal = _extract_kcal(str(analysis))
+        analysis = analyze_text_food(food, {})
+        kcal = extract_kcal(str(analysis))
 
-        add_food_entry(user.id, text=text, kcal=kcal)
+        add_food_entry(update.effective_user.id, food, kcal)
 
-        summ = get_today_summary(user.id)
-        entries = summ["entries"]
-        last_line = entries[-1]["text"] if entries else text
+        summary = get_today_summary(update.effective_user.id)
+
+        if context.user_data.get("mode") == "quick":
+            await query.message.reply_text(
+                f"Записал ✅\nКалорий сегодня: {summary['kcal_total']}",
+                reply_markup=MAIN_KB,
+            )
+        else:
+            await query.message.reply_text(
+                f"Записал ✅\nКалорий: {summary['kcal_total']} / {summary['kcal_target']}\n"
+                f"Осталось: {summary['kcal_left']}",
+                reply_markup=MAIN_KB,
+            )
 
         await query.message.reply_text(
-            f"Записал ✅\n\nПоследнее: {last_line}\n"
-            f"Ккал сегодня: {summ['kcal_total']} / {summ['kcal_target']}\n"
-            f"Осталось: {summ['kcal_left']}",
+            "Хочешь привести тело в порядок системно? Жми 🔥 Привести тело в порядок",
             reply_markup=MAIN_KB,
         )
-        _set_state(ctx, S_NONE)
         return
 
+    # ---- советы
+    if data.startswith("adv_"):
+        prompts = {
+            "adv_sweet": "Хочу сладкое без срыва",
+            "adv_hearty": "Хочу сытную еду, но без переедания",
+            "adv_light": "Хочу лёгкую еду",
+            "adv_protein": "Как добрать белок сегодня",
+            "adv_dinner": "Что съесть на ужин",
+        }
 
-# ---------- Text / photo / voice messages ----------
-async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username or "")
+        if data == "adv_question":
+            context.user_data["state"] = "ask_coach"
+            await query.message.reply_text("Задай вопрос.")
+            return
 
-    # profile steps first
-    if await _profile_step(update, ctx):
+        reply = coach_chat(prompts[data])
+        await query.message.reply_text(reply, reply_markup=ADVICE_KB)
         return
 
-    st = _get_state(ctx)
-    text = (update.message.text or "").strip()
+# ================== ТЕКСТ ==================
 
-    # Main buttons
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+
+    # кнопки
     if text == "🍽 Добавить еду":
         await update.message.reply_text("Как добавим?", reply_markup=ADD_KB)
         return
@@ -351,119 +216,100 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if text == "📊 Сегодня":
-        summ = get_today_summary(user.id)
-        lines = [f"• {e['text']}" for e in summ["entries"][-10:]] or ["— пока пусто —"]
+        summary = get_today_summary(update.effective_user.id)
         await update.message.reply_text(
-            "Сегодня:\n" + "\n".join(lines) +
-            f"\n\nКкал: {summ['kcal_total']} / {summ['kcal_target']} (осталось {summ['kcal_left']})",
+            f"Калорий сегодня: {summary['kcal_total']}",
             reply_markup=MAIN_KB,
         )
         return
 
-    if text == "⚙️ Профиль":
-        u = get_user(user.id)
-        p = u.get("profile", {})
+    if text == "🔥 Привести тело в порядок":
         await update.message.reply_text(
-            "Профиль:\n"
-            f"Возраст: {p.get('age')}\n"
-            f"Пол: {p.get('sex')}\n"
-            f"Рост: {p.get('height')}\n"
-            f"Вес: {p.get('weight')}\n"
-            f"Цель ккал: {p.get('kcal_target')}\n\n"
-            "Хочешь обновить? Напиши: /profile",
+            "Отличное решение 💪\n"
+            "Включи режим плана: ⚙️ Режим → План и статистика\n"
+            "И начнём работать системно.",
             reply_markup=MAIN_KB,
         )
         return
 
-    # Advice custom question
-    if st == S_ADVICE_ASK:
+    if text == "⚙️ Режим":
+        await update.message.reply_text("Выбери режим:", reply_markup=MODE_KB)
+        return
+
+    # ---- ожидание еды
+    if context.user_data.get("state") in ["wait_text_food", "edit_food"]:
+        context.user_data["last_food"] = text
+        context.user_data["state"] = None
+        await update.message.reply_text(
+            f"Хочу записать:\n{text}\n\nПодтверждаешь?",
+            reply_markup=CONFIRM_KB,
+        )
+        return
+
+    # ---- вопрос коучу
+    if context.user_data.get("state") == "ask_coach":
         reply = coach_chat(text)
-        await update.message.reply_text(reply, reply_markup=ADVICE_KB)
-        _set_state(ctx, S_NONE)
+        context.user_data["state"] = None
+        await update.message.reply_text(reply)
         return
 
-    # Add text flow
-    if st == S_ADD_TEXT:
-        if _needs_profile(user.id):
-            ctx.user_data["pending_food_text"] = text
-            await _start_profile_flow(update.effective_chat, ctx)
-            return
-        await _show_confirm(update, ctx, text)
-        return
+# ================== ФОТО ==================
 
-    # Edit flow
-    if st == S_EDIT:
-        await _show_confirm(update, ctx, text)
-        return
-
-    await update.message.reply_text("Выбери действие кнопками ниже.", reply_markup=MAIN_KB)
-
-
-async def on_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username or "")
-
-    if await _profile_step(update, ctx):
-        return
-
-    st = _get_state(ctx)
-    if st != S_ADD_PHOTO:
-        await update.message.reply_text("Фото принимаю только через: 🍽 Добавить еду → 📷 Фото", reply_markup=MAIN_KB)
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("state") != "wait_photo_food":
         return
 
     photo = update.message.photo[-1]
-    file = await ctx.bot.get_file(photo.file_id)
+    file = await context.bot.get_file(photo.file_id)
     data = await file.download_as_bytearray()
 
-    recognized = analyze_food(bytes(data))
-    await update.message.reply_text(f"Я вижу так:\n\n{recognized}\n")
-    await _show_confirm(update, ctx, str(recognized))
+    result = analyze_food(bytes(data))
+    context.user_data["last_food"] = str(result)
+    context.user_data["state"] = None
 
+    await update.message.reply_text(
+        f"Я увидел:\n{result}\n\nЗаписать?",
+        reply_markup=CONFIRM_KB,
+    )
 
-async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username or "")
+# ================== ГОЛОС ==================
 
-    if await _profile_step(update, ctx):
-        return
-
-    st = _get_state(ctx)
-    if st != S_ADD_VOICE:
-        await update.message.reply_text("Голос принимаю только через: 🍽 Добавить еду → 🎤 Голос", reply_markup=MAIN_KB)
+async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("state") != "wait_voice_food":
         return
 
     voice = update.message.voice
-    file = await ctx.bot.get_file(voice.file_id)
+    file = await context.bot.get_file(voice.file_id)
     data = await file.download_as_bytearray()
 
     text = transcribe_voice(bytes(data))
-    await update.message.reply_text(f"Распознал голос так:\n\n{text}\n")
-    await _show_confirm(update, ctx, str(text))
+    context.user_data["last_food"] = text
+    context.user_data["state"] = None
 
+    await update.message.reply_text(
+        f"Распознал так:\n{text}\n\nЗаписать?",
+        reply_markup=CONFIRM_KB,
+    )
 
-async def profile_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    # force profile flow
-    await _start_profile_flow(update.effective_chat, ctx)
+# ================== Kcal ==================
 
+def extract_kcal(text):
+    m = re.search(r"(\\d{2,5})\\s*(ккал|kcal)", text.lower())
+    return int(m.group(1)) if m else None
+
+# ================== MAIN ==================
 
 def main():
-    if not TOKEN:
-        raise RuntimeError("TELEGRAM_TOKEN is missing in .env")
-
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("profile", profile_cmd))
-
-    app.add_handler(CallbackQueryHandler(on_callback))
-
-    app.add_handler(MessageHandler(filters.PHOTO, on_photo))
-    app.add_handler(MessageHandler(filters.VOICE, on_voice))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_handler(CallbackQueryHandler(callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    app.add_handler(MessageHandler(filters.VOICE, voice_handler))
 
     print("Bot started...")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
