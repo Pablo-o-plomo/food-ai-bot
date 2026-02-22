@@ -21,36 +21,49 @@ client = OpenAI(api_key=OPENAI_KEY)
 # ---------------- SETTINGS ----------------
 
 MODEL = "gpt-4o"
-MAX_HISTORY = 12  # ограничение памяти диалога
+MAX_HISTORY = 12
+MAX_TELEGRAM_LENGTH = 4000
+
+# ---------------- SYSTEM PROMPT ----------------
+
+SYSTEM_PROMPT = """
+Ты персональный AI-нутрициолог.
+
+Правила ответа:
+- Пиши кратко (до 1000 символов)
+- Без хештегов
+- Без лишней воды
+- Структурировано
+- Используй умеренные эмодзи (🍳 🥗 🔥 💪 📊)
+- Делай переносы строк
+- Не делай огромных абзацев
+
+Формат:
+Заголовок
+Краткий разбор
+Чёткие цифры
+"""
 
 # ---------------- MEMORY ----------------
 
 user_sessions = {}
-
-SYSTEM_PROMPT = """
-Ты персональный AI-нутрициолог и коуч.
-Ты умеешь:
-- составлять план питания
-- считать калории
-- анализировать фото еды
-- помогать в похудении
-- давать структурированные ответы
-
-Отвечай понятно, структурировано и профессионально.
-"""
-
-# ---------------- UTIL ----------------
 
 def trim_history(history):
     if len(history) > MAX_HISTORY:
         return [history[0]] + history[-MAX_HISTORY:]
     return history
 
+# ---------------- UTIL ----------------
+
+async def send_long_message(update, text):
+    for i in range(0, len(text), MAX_TELEGRAM_LENGTH):
+        await update.message.reply_text(text[i:i + MAX_TELEGRAM_LENGTH])
+
 # ---------------- HANDLERS ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "GPT-нутрициолог запущен 👌\nНапиши что угодно или отправь фото еды."
+        "GPT-нутрициолог запущен 👌\n\nНапиши сообщение или отправь фото еды 🍽"
     )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -70,20 +83,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = client.chat.completions.create(
             model=MODEL,
             messages=user_sessions[user_id],
-            temperature=0.7,
+            temperature=0.6,
+            max_tokens=600,
         )
 
         reply = response.choices[0].message.content
+        reply = reply.replace("#", "")
 
         user_sessions[user_id].append({"role": "assistant", "content": reply})
         user_sessions[user_id] = trim_history(user_sessions[user_id])
 
-        await update.message.reply_text(reply)
+        await send_long_message(update, reply)
 
     except Exception as e:
-        await update.message.reply_text("Ошибка обработки запроса.")
         print("TEXT ERROR:", e)
-
+        await update.message.reply_text("Произошла ошибка обработки запроса ⚠️")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -97,10 +111,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = client.responses.create(
             model="gpt-4.1",
             input=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT,
-                },
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {
                     "role": "user",
                     "content": [
@@ -116,13 +127,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         reply = response.output_text
+        reply = reply.replace("#", "")
 
-        await update.message.reply_text(reply)
+        await send_long_message(update, reply)
 
     except Exception as e:
-        await update.message.reply_text("Ошибка анализа фото.")
         print("PHOTO ERROR:", e)
-
+        await update.message.reply_text("Ошибка анализа фото ⚠️")
 
 # ---------------- RUN ----------------
 
