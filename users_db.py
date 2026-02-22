@@ -18,7 +18,6 @@ def save_db(data):
 
 def add_food(user_id, calories, protein, fat, carbs):
     db = load_db()
-
     user_id = str(user_id)
 
     if user_id not in db:
@@ -26,17 +25,58 @@ def add_food(user_id, calories, protein, fat, carbs):
             "calories": 0,
             "protein": 0,
             "fat": 0,
-            "carbs": 0
+            "carbs": 0,
+            "history": []
         }
 
-    db[user_id]["calories"] += float(calories)
-    db[user_id]["protein"] += float(protein)
-    db[user_id]["fat"] += float(fat)
-    db[user_id]["carbs"] += float(carbs)
+    db[user_id]["calories"] += calories
+    db[user_id]["protein"] += protein
+    db[user_id]["fat"] += fat
+    db[user_id]["carbs"] += carbs
+
+    db[user_id]["history"].append({
+        "calories": calories,
+        "protein": protein,
+        "fat": fat,
+        "carbs": carbs
+    })
+
+    save_db(db)
+
+
+def undo_last(user_id):
+    db = load_db()
+    user_id = str(user_id)
+
+    if user_id not in db or not db[user_id]["history"]:
+        return None
+
+    last = db[user_id]["history"].pop()
+
+    db[user_id]["calories"] -= last["calories"]
+    db[user_id]["protein"] -= last["protein"]
+    db[user_id]["fat"] -= last["fat"]
+    db[user_id]["carbs"] -= last["carbs"]
+
+    save_db(db)
+    return db[user_id]
+
+
+def reset_day(user_id):
+    db = load_db()
+    user_id = str(user_id)
+
+    db[user_id] = {
+        "calories": 0,
+        "protein": 0,
+        "fat": 0,
+        "carbs": 0,
+        "history": []
+    }
 
     save_db(db)
 
 
 def get_day(user_id):
     db = load_db()
-    return db.get(str(user_id), {"calories":0,"protein":0,"fat":0,"carbs":0})
+    return db.get(str(user_id), {"calories":0,"protein":0,"fat":0,"carbs":0,"history":[]})
