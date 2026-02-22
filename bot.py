@@ -28,7 +28,7 @@ from users_db import ensure_user, add_food_entry, get_today_summary, set_profile
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# ---------------- КЛАВИАТУРЫ ----------------
+# ---------------- UI ----------------
 
 MAIN_KB = ReplyKeyboardMarkup(
     [
@@ -39,12 +39,6 @@ MAIN_KB = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-ADD_METHOD_KB = InlineKeyboardMarkup([
-    [InlineKeyboardButton("📷 Фото", callback_data="food_photo")],
-    [InlineKeyboardButton("🎤 Голос", callback_data="food_voice")],
-    [InlineKeyboardButton("✍️ Текст", callback_data="food_text")],
-])
-
 CONFIRM_KB = InlineKeyboardMarkup(
     [
         [InlineKeyboardButton("✅ Записать", callback_data="save_food")],
@@ -54,67 +48,155 @@ CONFIRM_KB = InlineKeyboardMarkup(
 )
 
 ASK_NORM_KB = InlineKeyboardMarkup(
-    [[InlineKeyboardButton("Посчитать мою норму", callback_data="calc_norm")]]
+    [[InlineKeyboardButton("Посчитать норму", callback_data="calc_norm")]]
 )
 
-SEX_KB = InlineKeyboardMarkup([
-    [InlineKeyboardButton("Мужской", callback_data="sex_m")],
-    [InlineKeyboardButton("Женский", callback_data="sex_f")],
-])
+SEX_KB = InlineKeyboardMarkup(
+    [
+        [InlineKeyboardButton("Мужской", callback_data="sex_m")],
+        [InlineKeyboardButton("Женский", callback_data="sex_f")],
+    ]
+)
 
-# ---------------- START ----------------
+# ---------------- Helpers ----------------
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    ensure_user(user.id, user.username or "")
+def extract_kcal(text: str) -> int:
+    if not text:
+        return 0
+    m = re.search(r"(\d{2,5})\s*(ккал|kcal)", text.lower())
+    return int(m.group(1)) if m else 0
 
-    context.user_data["state"] = None
+def format_today(user_id: int) -> str:
+    user = get_user(user_id)
+    target = (user.get("profile", {}) or {}).get("kcal_target")
+    summary = get_today_summary(user_id)
+    total = int(summary.get("kcal_total", 0) or 0)
 
-    await update.message.reply_text(
-        f"Привет, {user.first_name} 👋\n"
-        "Я считаю калории.\n"
-        "Нажми ➕ Добавить еду и отправь фото, голос или текст.",
-        reply_markup=MAIN_KB,
-    )
+    if target:
+        left = int(target) - total
+        return f"Сегодня: {total} / {target} ккал\nОсталось: {left} ккал"
+    return f"Сегодня съедено: {total} ккал"
 
-# ---------------- ТЕКСТ ----------------
+async def reply_food_saved(chat, user_id: int, food_text: str, kcal: int):
+    user = get_user(user_id)
+    target = (user.get("profile", {}) or {}).get("kcal_target")
+    summary = get_today_summary(user_id)
 
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    user_id = update.effective_user.id
-    state = context.user_data.get("state")
-
-    # меню
-    if text == "➕ Добавить еду":
-        context.user_data["state"] = None
-        await update.message.reply_text("Как добавим?", reply_markup=ADD_METHOD_KB)
-        return
-
-    if text == "📊 Сегодня":
-        user = get_user(user_id)
-        profile = user.get("profile", {})
-        target = profile.get("kcal_target")
-        summary = get_today_summary(user_id)
-
-        if not target:
-            await update.message.reply_text(
-                f"Сегодня съедено: {summary['kcal_total']} ккал\n\n"
-                "Хочешь — посчитаю твою норму.",
-                reply_markup=ASK_NORM_KB,
-            )
-            return
-
-        left = target - summary["kcal_total"]
-        await update.message.reply_text(
+    if target:
+        left = int(target) - int(summary["kcal_total"])
+        await chat.send_message(
+            f"{food_text}\n≈ {kcal} ккал\n\n"
             f"Сегодня: {summary['kcal_total']} / {target} ккал\n"
             f"Осталось: {left} ккал",
             reply_markup=MAIN_KB,
         )
+    else:
+        await chat.send_message(
+            f"{food_text}\n≈ {kcal} ккал\n\n"
+            f"Сегодня: {summary['kcal_total']} ккал",
+            reply_markup=MAIN_KB,
+        )
+
+# ---------------- Start ----------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username or "")
+    context.user_data["state"] = None
+
+    await update.message.reply_text(
+        f"Привет, {user.first_name} 👋\n\n"
+        "Я считаю калории.\n"
+        "Нажми ➕ Добавить еду и отправь текст/фото/голос.\n"
+        "📊 Сегодня покажет сумму и остаток (если есть норма).",
+        reply_markup=MAIN_KB,
+    )
+
+# ---------------- Text ----------------
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    ensure_user(user.id, user.username or "")
+    user_id = user.id
+    text = (update.message.text or "").strip()
+    state = context.user_data.get("state")
+
+    # меню
+    if text == "➕ Добавить еду":
+        context.user_data["state"] = "waiting_food_any"
+        await update.message.reply_text("Ок. Отправь что съел: текст / фото / голос.")
+        return
+
+    if text == "📊 Сегодня":
+        user_obj = get_user(user_id)
+        target = (user_obj.get("profile", {}) or {}).get("kcal_target")
+        msg = format_today(user_id)
+
+        if not target:
+            await update.message.reply_text(
+                msg + "\n\nХочешь — посчитаю твою норму.",
+                reply_markup=ASK_NORM_KB,
+            )
+        else:
+            await update.message.reply_text(msg, reply_markup=MAIN_KB)
         return
 
     if text == "🧠 Совет":
         context.user_data["state"] = "coach"
-        await update.message.reply_text("Спроси любой вопрос про питание.")
+        await update.message.reply_text("Ок. Задай вопрос про питание.")
+        return
+
+    # анкета нормы
+    if state == "ask_age":
+        try:
+            age = int(text)
+        except:
+            await update.message.reply_text("Возраст — числом. Например: 32")
+            return
+        context.user_data["age"] = age
+        context.user_data["state"] = "ask_height"
+        await update.message.reply_text("Рост (см)?")
+        return
+
+    if state == "ask_height":
+        try:
+            height = int(text)
+        except:
+            await update.message.reply_text("Рост — числом. Например: 180")
+            return
+        context.user_data["height"] = height
+        context.user_data["state"] = "ask_weight"
+        await update.message.reply_text("Вес (кг)?")
+        return
+
+    if state == "ask_weight":
+        try:
+            weight = float(text.replace(",", "."))
+        except:
+            await update.message.reply_text("Вес — числом. Например: 92 или 92.5")
+            return
+
+        sex = context.user_data.get("sex")
+        age = context.user_data.get("age")
+        height = context.user_data.get("height")
+
+        if sex not in ("m", "f") or not age or not height:
+            context.user_data["state"] = None
+            await update.message.reply_text("Анкета сбилась. Нажми 📊 Сегодня → Посчитать норму.")
+            return
+
+        # Mifflin-St Jeor (простая версия) + лёгкий дефицит
+        bmr = 10 * weight + 6.25 * height - 5 * age + (5 if sex == "m" else -161)
+        target = int(bmr * 1.4 - 400)
+
+        set_profile_field(user_id, "kcal_target", target)
+        context.user_data["state"] = None
+
+        await update.message.reply_text(
+            f"Готово 👍\nТвоя дневная норма: ~{target} ккал\n"
+            "Теперь буду показывать остаток в 📊 Сегодня и после приёмов пищи.",
+            reply_markup=MAIN_KB,
+        )
         return
 
     # коуч
@@ -123,76 +205,52 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
         return
 
-    # ---- ТЕКСТ ЕДА (СРАЗУ СЧИТАЕМ) ----
-    if state == "waiting_food_text":
+    # еда текстом — считаем и записываем сразу
+    # (если пользователь уже нажал “Добавить еду” ИЛИ просто написал еду без кнопок)
+    if state == "waiting_food_any" or looks_like_food_text(text):
         analysis = analyze_text_food(text, {})
         kcal = extract_kcal(str(analysis))
-
         add_food_entry(user_id, text, kcal)
         context.user_data["state"] = None
-
-        user = get_user(user_id)
-        target = user.get("profile", {}).get("kcal_target")
-        summary = get_today_summary(user_id)
-
-        if target:
-            left = target - summary["kcal_total"]
-            await update.message.reply_text(
-                f"{text}\n≈ {kcal} ккал\n\n"
-                f"Сегодня: {summary['kcal_total']} / {target} ккал\n"
-                f"Осталось: {left} ккал",
-                reply_markup=MAIN_KB,
-            )
-        else:
-            await update.message.reply_text(
-                f"{text}\n≈ {kcal} ккал\n\n"
-                f"Сегодня: {summary['kcal_total']} ккал",
-                reply_markup=MAIN_KB,
-            )
+        await reply_food_saved(update.effective_chat, user_id, text, kcal)
         return
 
-    # ---- АНКЕТА НОРМЫ ----
-    if state == "ask_age":
-        context.user_data["age"] = int(text)
-        context.user_data["state"] = "ask_height"
-        await update.message.reply_text("Рост (см)?")
-        return
+    await update.message.reply_text("Нажми ➕ Добавить еду или 📊 Сегодня.", reply_markup=MAIN_KB)
 
-    if state == "ask_height":
-        context.user_data["height"] = int(text)
-        context.user_data["state"] = "ask_weight"
-        await update.message.reply_text("Вес (кг)?")
-        return
+def looks_like_food_text(text: str) -> bool:
+    """
+    Чтобы не требовать кнопку всегда, пытаемся распознать, что сообщение похоже на еду.
+    Очень простое правило: есть цифра/кол-во или ключевые слова еды.
+    """
+    t = text.lower()
+    if any(w in t for w in ["яйц", "куриц", "рис", "греч", "хлеб", "сыр", "мяс", "рыб", "суп", "паста", "карто", "салат", "йогур", "творог", "банан", "яблок", "шаур", "бургер", "пицц"]):
+        return True
+    if re.search(r"\b\d+\b", t):
+        return True
+    return False
 
-    if state == "ask_weight":
-        weight = float(text)
-        age = context.user_data["age"]
-        height = context.user_data["height"]
-        sex = context.user_data["sex"]
-
-        bmr = 10*weight + 6.25*height - 5*age + (5 if sex=="m" else -161)
-        target = int(bmr*1.4 - 400)
-
-        set_profile_field(user_id, "kcal_target", target)
-        context.user_data["state"] = None
-
-        await update.message.reply_text(
-            f"Твоя норма: ~{target} ккал/день\nТеперь буду показывать остаток 👍",
-            reply_markup=MAIN_KB,
-        )
-
-# ---------------- ФОТО ----------------
+# ---------------- Photo ----------------
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("state") != "waiting_photo":
+    user = update.effective_user
+    ensure_user(user.id, user.username or "")
+    user_id = user.id
+
+    # если мы в коуче — не мешаем
+    if context.user_data.get("state") == "coach":
+        await update.message.reply_text("Я сейчас в режиме 🧠 Совет. Нажми ➕ Добавить еду для фото.")
         return
 
+    # принимаем фото всегда (чтобы не было “не распознаёт”)
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     data = await file.download_as_bytearray()
 
-    result = analyze_food(bytes(data))
-    context.user_data["last_food"] = result
+    result = analyze_food(bytes(data))  # должен вернуть текст
+    if not result:
+        result = "Не смог определить еду на фото."
+
+    context.user_data["last_food"] = str(result)
     context.user_data["state"] = None
 
     await update.message.reply_text(
@@ -200,10 +258,15 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=CONFIRM_KB,
     )
 
-# ---------------- ГОЛОС ----------------
+# ---------------- Voice ----------------
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("state") != "waiting_voice":
+    user = update.effective_user
+    ensure_user(user.id, user.username or "")
+    user_id = user.id
+
+    if context.user_data.get("state") == "coach":
+        await update.message.reply_text("Я сейчас в режиме 🧠 Совет. Нажми ➕ Добавить еду для голоса.")
         return
 
     voice = update.message.voice
@@ -211,7 +274,10 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = await file.download_as_bytearray()
 
     text = transcribe_voice(bytes(data))
-    context.user_data["last_food"] = text
+    if not text:
+        text = "Не смог распознать голос."
+
+    context.user_data["last_food"] = str(text)
     context.user_data["state"] = None
 
     await update.message.reply_text(
@@ -219,52 +285,43 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=CONFIRM_KB,
     )
 
-# ---------------- CALLBACK ----------------
+# ---------------- Callback ----------------
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    user = update.effective_user
+    ensure_user(user.id, user.username or "")
+    user_id = user.id
+
     data = query.data
-    user_id = update.effective_user.id
-
-    if data == "food_text":
-        context.user_data["state"] = "waiting_food_text"
-        await query.message.reply_text("Напиши что съел.")
-        return
-
-    if data == "food_photo":
-        context.user_data["state"] = "waiting_photo"
-        await query.message.reply_text("Пришли фото еды.")
-        return
-
-    if data == "food_voice":
-        context.user_data["state"] = "waiting_voice"
-        await query.message.reply_text("Запиши голосом что съел.")
-        return
 
     if data == "cancel_food":
+        context.user_data["last_food"] = None
         context.user_data["state"] = None
         await query.message.reply_text("Ок 👍", reply_markup=MAIN_KB)
         return
 
     if data == "edit_food":
-        context.user_data["state"] = "waiting_food_text"
-        await query.message.reply_text("Исправь и отправь заново.")
+        context.user_data["state"] = "waiting_food_any"
+        await query.message.reply_text("Ок. Напиши исправленный текст.")
         return
 
     if data == "save_food":
         food = context.user_data.get("last_food")
-        analysis = analyze_text_food(food, {})
+        if not food:
+            await query.message.reply_text("Не вижу что сохранять. Нажми ➕ Добавить еду.")
+            return
+
+        analysis = analyze_text_food(str(food), {})
         kcal = extract_kcal(str(analysis))
 
-        add_food_entry(user_id, food, kcal)
+        add_food_entry(user_id, str(food), kcal)
         context.user_data["state"] = None
 
-        summary = get_today_summary(user_id)
-        await query.message.reply_text(
-            f"Записал 👍\nСегодня: {summary['kcal_total']} ккал",
-            reply_markup=MAIN_KB,
-        )
+        await query.message.reply_text("Записал 👍", reply_markup=MAIN_KB)
+        await reply_food_saved(query.message.chat, user_id, str(food), kcal)
         return
 
     if data == "calc_norm":
@@ -284,22 +341,20 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Возраст?")
         return
 
-# ---------------- УТИЛИТА ----------------
-
-def extract_kcal(text):
-    m = re.search(r"(\d{2,5})\s*(ккал|kcal)", text.lower())
-    return int(m.group(1)) if m else 0
-
-# ---------------- MAIN ----------------
+# ---------------- Main ----------------
 
 def main():
+    if not TOKEN:
+        raise RuntimeError("TELEGRAM_TOKEN is missing in .env")
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(MessageHandler(filters.VOICE, voice_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     print("Bot started...")
     app.run_polling()
