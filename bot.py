@@ -18,18 +18,15 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = "food.jpg"
     await photo_file.download_to_drive(file_path)
 
-    await update.message.reply_text("Анализирую еду...")
+    await update.message.reply_text("Анализирую...")
 
-    try:
-        result = analyze_food(file_path)
-        await update.message.reply_text(result)
-    except Exception as e:
-        await update.message.reply_text("Не смог распознать фото 😢 Попробуй ещё раз.")
+    result = analyze_food(file_path)
+
+    await update.message.reply_text(result)
 
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.PHOTO, photo))
 
-print("Бот запускается...")
 app.run_polling()
