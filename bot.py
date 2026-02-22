@@ -2,7 +2,7 @@ import os
 import base64
 from dotenv import load_dotenv
 from openai import OpenAI
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -18,161 +18,113 @@ OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
 client = OpenAI(api_key=OPENAI_KEY)
 
-main_keyboard = ReplyKeyboardMarkup(
-    [
-        [KeyboardButton("📅 План на день")],
-        [KeyboardButton("🧮 Подсчитать калории")],
-    ],
-    resize_keyboard=True,
-)
+# ---------------- SETTINGS ----------------
 
-# ---------------- PLAN ----------------
+MODEL = "gpt-4o"
+MAX_HISTORY = 12  # ограничение памяти диалога
 
-def generate_plan(goal, weight, height, activity):
+# ---------------- MEMORY ----------------
 
-    prompt = f"""
-    Составь план питания на 1 день.
-    Цель: {goal}
-    Вес: {weight} кг
-    Рост: {height} см
-    Активность: {activity}
-    """
+user_sessions = {}
 
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=prompt,
-        max_output_tokens=500,
-    )
+SYSTEM_PROMPT = """
+Ты персональный AI-нутрициолог и коуч.
+Ты умеешь:
+- составлять план питания
+- считать калории
+- анализировать фото еды
+- помогать в похудении
+- давать структурированные ответы
 
-    return response.output_text
+Отвечай понятно, структурировано и профессионально.
+"""
 
+# ---------------- UTIL ----------------
 
-# ---------------- CALORIES TEXT ----------------
+def trim_history(history):
+    if len(history) > MAX_HISTORY:
+        return [history[0]] + history[-MAX_HISTORY:]
+    return history
 
-def calculate_calories(text):
-
-    prompt = f"""
-    Определи калорийность и БЖУ блюда:
-    {text}
-
-    Ответь:
-    Калории: ...
-    Белки: ...
-    Жиры: ...
-    Углеводы: ...
-    """
-
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=prompt,
-        max_output_tokens=300,
-    )
-
-    return response.output_text
-
-
-# ---------------- CALORIES PHOTO ----------------
-
-def analyze_food_image(image_bytes):
-
-    b64_image = base64.b64encode(image_bytes).decode("utf-8")
-
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": "Определи блюдо и напиши калории и БЖУ."
-                    },
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:image/jpeg;base64,{b64_image}"
-                    },
-                ],
-            }
-        ],
-        max_output_tokens=300,
-    )
-
-    return response.output_text
-
-
-# ---------------- BOT ----------------
+# ---------------- HANDLERS ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Бот питания запущен 👌",
-        reply_markup=main_keyboard,
+        "GPT-нутрициолог запущен 👌\nНапиши что угодно или отправь фото еды."
     )
-
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    text = update.message.text
+    try:
+        user_id = update.effective_user.id
+        text = update.message.text
 
-    if text == "📅 План на день":
-        await update.message.reply_text("Цель? (похудение / набор / поддержание)")
-        context.user_data["state"] = "goal"
-        return
+        if user_id not in user_sessions:
+            user_sessions[user_id] = [
+                {"role": "system", "content": SYSTEM_PROMPT}
+            ]
 
-    if context.user_data.get("state") == "goal":
-        context.user_data["goal"] = text
-        await update.message.reply_text("Вес?")
-        context.user_data["state"] = "weight"
-        return
+        user_sessions[user_id].append({"role": "user", "content": text})
+        user_sessions[user_id] = trim_history(user_sessions[user_id])
 
-    if context.user_data.get("state") == "weight":
-        context.user_data["weight"] = text
-        await update.message.reply_text("Рост?")
-        context.user_data["state"] = "height"
-        return
-
-    if context.user_data.get("state") == "height":
-        context.user_data["height"] = text
-        await update.message.reply_text("Активность?")
-        context.user_data["state"] = "activity"
-        return
-
-    if context.user_data.get("state") == "activity":
-
-        plan = generate_plan(
-            context.user_data["goal"],
-            context.user_data["weight"],
-            context.user_data["height"],
-            text,
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=user_sessions[user_id],
+            temperature=0.7,
         )
 
-        await update.message.reply_text("Составляю план...")
-        await update.message.reply_text(plan)
+        reply = response.choices[0].message.content
 
-        context.user_data.clear()
-        return
+        user_sessions[user_id].append({"role": "assistant", "content": reply})
+        user_sessions[user_id] = trim_history(user_sessions[user_id])
 
-    if text == "🧮 Подсчитать калории":
-        await update.message.reply_text("Отправь текст или фото блюда")
-        return
+        await update.message.reply_text(reply)
 
-    # если просто текст блюда
-    result = calculate_calories(text)
-    await update.message.reply_text(result)
+    except Exception as e:
+        await update.message.reply_text("Ошибка обработки запроса.")
+        print("TEXT ERROR:", e)
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    photo = update.message.photo[-1]
-    file = await photo.get_file()
+    try:
+        photo = update.message.photo[-1]
+        file = await photo.get_file()
+        image_bytes = await file.download_as_bytearray()
 
-    image_bytes = await file.download_as_bytearray()
+        b64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-    await update.message.reply_text("Анализирую фото...")
+        response = client.responses.create(
+            model="gpt-4.1",
+            input=[
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT,
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Проанализируй фото еды."},
+                        {
+                            "type": "input_image",
+                            "image_url": f"data:image/jpeg;base64,{b64_image}",
+                        },
+                    ],
+                },
+            ],
+            max_output_tokens=500,
+        )
 
-    result = analyze_food_image(image_bytes)
+        reply = response.output_text
 
-    await update.message.reply_text(result)
+        await update.message.reply_text(reply)
 
+    except Exception as e:
+        await update.message.reply_text("Ошибка анализа фото.")
+        print("PHOTO ERROR:", e)
+
+
+# ---------------- RUN ----------------
 
 if __name__ == "__main__":
 
@@ -182,5 +134,5 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    print("Бот запущен 🚀")
+    print("PRO GPT Бот запущен 🚀")
     app.run_polling()
