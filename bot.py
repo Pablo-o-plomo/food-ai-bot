@@ -28,7 +28,7 @@ from users_db import ensure_user, add_food_entry, get_today_summary, set_profile
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# ========== КЛАВИАТУРЫ ==========
+# ---------------- КЛАВИАТУРЫ ----------------
 
 MAIN_KB = ReplyKeyboardMarkup(
     [
@@ -62,7 +62,7 @@ SEX_KB = InlineKeyboardMarkup([
     [InlineKeyboardButton("Женский", callback_data="sex_f")],
 ])
 
-# ========== START ==========
+# ---------------- START ----------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -71,13 +71,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["state"] = None
 
     await update.message.reply_text(
-        f"Привет, {user.first_name} 👋\n\n"
+        f"Привет, {user.first_name} 👋\n"
         "Я считаю калории.\n"
         "Нажми ➕ Добавить еду и отправь фото, голос или текст.",
         reply_markup=MAIN_KB,
     )
 
-# ========== ТЕКСТ ==========
+# ---------------- ТЕКСТ ----------------
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -123,16 +123,35 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply)
         return
 
-    # текст еды
+    # ---- ТЕКСТ ЕДА (СРАЗУ СЧИТАЕМ) ----
     if state == "waiting_food_text":
-        context.user_data["last_food"] = text
-        await update.message.reply_text(
-            f"Я понял: {text}\nЗаписать?",
-            reply_markup=CONFIRM_KB,
-        )
+        analysis = analyze_text_food(text, {})
+        kcal = extract_kcal(str(analysis))
+
+        add_food_entry(user_id, text, kcal)
+        context.user_data["state"] = None
+
+        user = get_user(user_id)
+        target = user.get("profile", {}).get("kcal_target")
+        summary = get_today_summary(user_id)
+
+        if target:
+            left = target - summary["kcal_total"]
+            await update.message.reply_text(
+                f"{text}\n≈ {kcal} ккал\n\n"
+                f"Сегодня: {summary['kcal_total']} / {target} ккал\n"
+                f"Осталось: {left} ккал",
+                reply_markup=MAIN_KB,
+            )
+        else:
+            await update.message.reply_text(
+                f"{text}\n≈ {kcal} ккал\n\n"
+                f"Сегодня: {summary['kcal_total']} ккал",
+                reply_markup=MAIN_KB,
+            )
         return
 
-    # анкета
+    # ---- АНКЕТА НОРМЫ ----
     if state == "ask_age":
         context.user_data["age"] = int(text)
         context.user_data["state"] = "ask_height"
@@ -162,7 +181,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=MAIN_KB,
         )
 
-# ========== ФОТО ==========
+# ---------------- ФОТО ----------------
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("state") != "waiting_photo":
@@ -181,7 +200,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=CONFIRM_KB,
     )
 
-# ========== ГОЛОС ==========
+# ---------------- ГОЛОС ----------------
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("state") != "waiting_voice":
@@ -200,7 +219,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=CONFIRM_KB,
     )
 
-# ========== CALLBACK ==========
+# ---------------- CALLBACK ----------------
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -248,7 +267,6 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # анкета
     if data == "calc_norm":
         context.user_data["state"] = "ask_sex"
         await query.message.reply_text("Выбери пол:", reply_markup=SEX_KB)
@@ -266,13 +284,13 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Возраст?")
         return
 
-# ========== УТИЛИТА ==========
+# ---------------- УТИЛИТА ----------------
 
 def extract_kcal(text):
-    m = re.search(r"(\\d{2,5})\\s*(ккал|kcal)", text.lower())
+    m = re.search(r"(\d{2,5})\s*(ккал|kcal)", text.lower())
     return int(m.group(1)) if m else 0
 
-# ========== MAIN ==========
+# ---------------- MAIN ----------------
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
