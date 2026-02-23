@@ -27,8 +27,8 @@ def ensure_user(user_id):
             "trial_start": datetime.now().isoformat(),
             "trial_used": False,
             "subscription_end": None,
-            "voice_style": "alloy",
-            "mode": "text"
+            "mode": "text",
+            "used_promos": [],
         }
         save_db(db)
 
@@ -51,16 +51,15 @@ def update_user(user_id, key, value):
 
 
 def is_trial_active(user):
-    if user["trial_used"]:
+    if user.get("trial_used"):
         return False
-
     start = datetime.fromisoformat(user["trial_start"])
     return datetime.now() - start < timedelta(days=3)
 
 
 def is_subscription_active(user):
-    if not user["subscription_end"]:
+    end_raw = user.get("subscription_end")
+    if not end_raw:
         return False
-
-    end = datetime.fromisoformat(user["subscription_end"])
+    end = datetime.fromisoformat(end_raw)
     return datetime.now() < end

@@ -1,66 +1,56 @@
-from openai import OpenAI
 import os
 from dotenv import load_dotenv
+from openai import OpenAI
 
 load_dotenv()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 SYSTEM_PROMPT = """
-Ты персональная система контроля питания Павла Кузнецова.
-Шеф. Цифры. Питание без лишней воды.
+Ты — помощник по питанию в стиле Павла Кузнецова: шеф, цифры, по делу.
 
 Правила:
-- Отвечай коротко
-- Без звездочек и markdown
+- Пиши без markdown, без звездочек, без хештегов
+- Коротко, ясно
 - Без технических пояснений
-- По делу
 """
 
-# Память в рамках запущенного процесса
+# Память на время работы процесса (MVP)
 USER_MEMORY = {}
+MAX_HISTORY = 12  # 6 пар user/assistant
 
-MAX_HISTORY = 10
+VOICE_NAME = "alloy"  # один приятный голос (фикс)
 
 
-def generate_text(user_id, user_text):
-
+def generate_text(user_id: int, user_text: str) -> str:
     if user_id not in USER_MEMORY:
         USER_MEMORY[user_id] = []
 
     history = USER_MEMORY[user_id]
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    # добавляем прошлый контекст
-    for msg in history:
-        messages.append(msg)
-
-    # новое сообщение
+    messages.extend(history)
     messages.append({"role": "user", "content": user_text})
 
-    response = client.chat.completions.create(
+    resp = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
-        temperature=0.7
+        temperature=0.6,
     )
 
-    answer = response.choices[0].message.content
+    answer = (resp.choices[0].message.content or "").strip()
 
-    # сохраняем в память
     history.append({"role": "user", "content": user_text})
     history.append({"role": "assistant", "content": answer})
-
-    # ограничиваем историю
     USER_MEMORY[user_id] = history[-MAX_HISTORY:]
 
     return answer
 
 
-def generate_voice(text, voice_style):
+def generate_voice_bytes(text: str) -> bytes:
     speech = client.audio.speech.create(
         model="gpt-4o-mini-tts",
-        voice=voice_style,
-        input=text[:300]
+        voice=VOICE_NAME,
+        input=(text or "")[:260],  # коротко в голосе
     )
     return speech.read()
