@@ -1,4 +1,6 @@
 import os
+print("DEBUG OPENAI:", os.getenv("OPENAI_API_KEY"))
+import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
