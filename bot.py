@@ -82,6 +82,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
+async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ensure_user(update.effective_user.id, update.effective_user)
+    await update.message.reply_text(today_text(update.effective_user.id))
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
