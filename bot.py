@@ -16,7 +16,17 @@ from telegram.ext import (
     filters,
 )
 
-from users_db import ensure_user, get_food_logs, get_profile, get_user, init_db, update_user
+from users_db import (
+    DatabaseNotConfigured,
+    database_config_error,
+    ensure_user,
+    get_food_logs,
+    get_profile,
+    get_user,
+    init_db,
+    log_database_environment_diagnostics,
+    update_user,
+)
 from services.access import has_pro
 from services.ai import generate_text
 from handlers.menu import main_menu, pro_menu
@@ -72,6 +82,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
+async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ensure_user(update.effective_user.id, update.effective_user)
+    await update.message.reply_text(today_text(update.effective_user.id))
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -84,6 +97,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help — помощь\n\n"
         "После фото доступны кнопки: сохранить, исправить, изменить порцию, не сохранять, сегодня."
     )
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    error = context.error
+    if isinstance(error, DatabaseNotConfigured):
+        print(f"Database is not configured: {error}")
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text(
+                "База данных не настроена. Добавь DATABASE_URL в Railway Variables "
+                "или подключи Postgres service variable reference."
+            )
+        return
+    print(f"Unhandled bot error: {error}")
 
 
 async def today_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,6 +230,7 @@ def build_application() -> Application:
         raise RuntimeError("BOT_TOKEN is required")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_error_handler(error_handler)
 
     onboarding = ConversationHandler(
         entry_points=[CommandHandler("start", start), CommandHandler("profile", profile_command)],
@@ -268,7 +295,8 @@ def create_fastapi_app(application: Application):
 
     @api.get("/health")
     async def health():
-        return {"status": "ok"}
+        db_error = database_config_error()
+        return {"status": "ok" if not db_error else "degraded", "database_configured": db_error is None, "database_error": db_error}
 
     @api.post(webhook_path)
     async def telegram_webhook(request: Request):
@@ -281,7 +309,14 @@ def create_fastapi_app(application: Application):
 
 
 def main():
-    init_db()
+    db_error = database_config_error()
+    if db_error:
+        print(f"Database startup check failed: {db_error}")
+        log_database_environment_diagnostics()
+        print("Bot will start in degraded mode so Railway can deploy; bot commands that need DB will ask to configure DATABASE_URL.")
+    else:
+        init_db()
+
     application = build_application()
     mode = os.getenv("BOT_MODE", "polling").lower()
 

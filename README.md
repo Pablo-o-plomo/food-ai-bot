@@ -6,7 +6,7 @@ Telegram bot for food recognition, nutrition logging, onboarding, subscriptions 
 
 - `BOT_TOKEN`
 - `OPENAI_API_KEY`
-- `DATABASE_URL` — Railway Postgres connection string. If it is absent, the bot can also use Railway/Postgres `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGPORT`.
+- `DATABASE_URL` — Railway Postgres connection string. If it is absent, the bot can also use Railway/Postgres `DATABASE_PRIVATE_URL`, `DATABASE_PUBLIC_URL`, `POSTGRES_URL`, `POSTGRES_PRIVATE_URL`, `POSTGRES_PUBLIC_URL`, `POSTGRES_DATABASE_URL`, `RAILWAY_DATABASE_URL`, or `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGPORT`.
 
 ## Payments
 
@@ -30,4 +30,6 @@ BOT_MODE=webhook PUBLIC_URL=https://your-app.up.railway.app WEBHOOK_PATH=/webhoo
 
 Health check: `GET /health`.
 
-For database env debugging, temporarily set `DEBUG_DATABASE_ENV=1`; the bot logs database-related env key names and whether `DATABASE_URL` is present, without printing secret values.
+For database env debugging, temporarily set `DEBUG_DATABASE_ENV=1`; the bot logs `os.environ.keys()`, the result of `os.getenv("DATABASE_URL")` as `<set>`/`None`, and database-related env key names without printing secret values.
+
+If Railway logs show `Present database-related env keys: none`, the service has no Postgres variables attached. Add a Postgres plugin/service and set `DATABASE_URL` to the Railway variable reference, for example `${{Postgres.DATABASE_URL}}` (use your actual Postgres service name). The bot now starts in degraded mode instead of crash-looping when DB variables are absent, and `/health` reports `database_configured=false`.

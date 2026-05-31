@@ -30,10 +30,23 @@ def _env(name: str) -> str | None:
 def _database_url() -> str:
     _debug_database_env()
 
-    for name in ("DATABASE_URL", "POSTGRES_URL", "POSTGRES_PRIVATE_URL", "DATABASE_PRIVATE_URL"):
+    for name in (
+        "DATABASE_URL",
+        "DATABASE_PRIVATE_URL",
+        "DATABASE_PUBLIC_URL",
+        "POSTGRES_URL",
+        "POSTGRES_PRIVATE_URL",
+        "POSTGRES_PUBLIC_URL",
+        "POSTGRES_DATABASE_URL",
+        "RAILWAY_DATABASE_URL",
+    ):
         url = _env(name)
         if url:
             return url
+
+    discovered_url = _discover_database_url_from_env()
+    if discovered_url:
+        return discovered_url
 
     conninfo = _database_conninfo_from_pg_vars()
     if conninfo:
@@ -44,6 +57,17 @@ def _database_url() -> str:
         "DATABASE_URL is required. Railway must provide DATABASE_URL or PGHOST/PGUSER/"
         f"PGPASSWORD/PGDATABASE. Present database-related env keys: {present}"
     )
+
+
+def _discover_database_url_from_env() -> str | None:
+    for key in _database_env_keys():
+        if key == "DATABASE_URL":
+            continue
+        if key.endswith("DATABASE_URL") or key.endswith("POSTGRES_URL"):
+            url = _env(key)
+            if url:
+                return url
+    return None
 
 
 def _database_conninfo_from_pg_vars() -> str | None:
@@ -74,8 +98,26 @@ def _database_env_keys() -> list[str]:
 def _debug_database_env() -> None:
     if _env("DEBUG_DATABASE_ENV") != "1":
         return
+    log_database_environment_diagnostics()
+
+
+def log_database_environment_diagnostics() -> None:
+    database_url = os.getenv("DATABASE_URL")
+    print("os.environ.keys():", os.environ.keys())
+    print('os.getenv("DATABASE_URL"):', "<set>" if database_url else None)
     print("DATABASE env keys:", _database_env_keys())
-    print("DATABASE_URL present:", bool(os.getenv("DATABASE_URL")))
+
+
+def database_config_error() -> str | None:
+    try:
+        _database_url()
+    except DatabaseNotConfigured as exc:
+        return str(exc)
+    return None
+
+
+def is_database_configured() -> bool:
+    return database_config_error() is None
 
 
 @contextmanager
