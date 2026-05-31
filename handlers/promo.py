@@ -1,11 +1,10 @@
-from datetime import datetime, timedelta
-from users_db import ensure_user, get_user, update_user
+from users_db import activate_subscription, ensure_user, get_user, update_user
 
-# Примеры. Потом сделаем генератор одноразовых кодов.
 PROMO_CODES = {
     "KING30": 30,
     "KING365": 365,
 }
+
 
 def apply_promo_code(user_id: int, code: str):
     ensure_user(user_id)
@@ -23,12 +22,9 @@ def apply_promo_code(user_id: int, code: str):
         return False, "Промокод недействителен."
 
     days = PROMO_CODES[code]
-    end = (datetime.now() + timedelta(days=days)).isoformat()
-
-    update_user(user_id, "subscription_end", end)
-    update_user(user_id, "trial_used", True)
+    end = activate_subscription(user_id, days=days)
 
     used.append(code)
     update_user(user_id, "used_promos", used)
 
-    return True, f"🔥 PRO активирован на {days} дней."
+    return True, f"🔥 PRO активирован на {days} дней. Доступ до {end.date()}."
