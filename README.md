@@ -6,7 +6,7 @@ Telegram bot for food recognition, nutrition logging, onboarding, subscriptions 
 
 - `BOT_TOKEN`
 - `OPENAI_API_KEY`
-- `DATABASE_URL`
+- `DATABASE_URL` — Railway Postgres connection string. If it is absent, the bot can also use Railway/Postgres `PGHOST`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGPORT`.
 
 ## Payments
 
@@ -29,3 +29,5 @@ BOT_MODE=webhook PUBLIC_URL=https://your-app.up.railway.app WEBHOOK_PATH=/webhoo
 ```
 
 Health check: `GET /health`.
+
+For database env debugging, temporarily set `DEBUG_DATABASE_ENV=1`; the bot logs database-related env key names and whether `DATABASE_URL` is present, without printing secret values.

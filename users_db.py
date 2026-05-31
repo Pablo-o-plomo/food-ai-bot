@@ -5,21 +5,77 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import psycopg
+from dotenv import load_dotenv
+from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Railway injects variables into the real process environment. Load a local
+# .env only as a development fallback and never override production env values.
+load_dotenv(override=False)
 
 
 class DatabaseNotConfigured(RuntimeError):
     pass
 
 
+def _env(name: str) -> str | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
 def _database_url() -> str:
-    url = os.getenv("DATABASE_URL") or DATABASE_URL
-    if not url:
-        raise DatabaseNotConfigured("DATABASE_URL is required")
-    return url
+    _debug_database_env()
+
+    for name in ("DATABASE_URL", "POSTGRES_URL", "POSTGRES_PRIVATE_URL", "DATABASE_PRIVATE_URL"):
+        url = _env(name)
+        if url:
+            return url
+
+    conninfo = _database_conninfo_from_pg_vars()
+    if conninfo:
+        return conninfo
+
+    present = ", ".join(_database_env_keys()) or "none"
+    raise DatabaseNotConfigured(
+        "DATABASE_URL is required. Railway must provide DATABASE_URL or PGHOST/PGUSER/"
+        f"PGPASSWORD/PGDATABASE. Present database-related env keys: {present}"
+    )
+
+
+def _database_conninfo_from_pg_vars() -> str | None:
+    host = _env("PGHOST")
+    user = _env("PGUSER")
+    password = _env("PGPASSWORD")
+    dbname = _env("PGDATABASE") or _env("POSTGRES_DB")
+    if not all((host, user, password, dbname)):
+        return None
+
+    kwargs = {
+        "host": host,
+        "user": user,
+        "password": password,
+        "dbname": dbname,
+        "port": _env("PGPORT") or "5432",
+    }
+    sslmode = _env("PGSSLMODE")
+    if sslmode:
+        kwargs["sslmode"] = sslmode
+    return make_conninfo(**kwargs)
+
+
+def _database_env_keys() -> list[str]:
+    return sorted(key for key in os.environ if "DATABASE" in key or "POSTGRES" in key or key.startswith("PG"))
+
+
+def _debug_database_env() -> None:
+    if _env("DEBUG_DATABASE_ENV") != "1":
+        return
+    print("DATABASE env keys:", _database_env_keys())
+    print("DATABASE_URL present:", bool(os.getenv("DATABASE_URL")))
 
 
 @contextmanager
